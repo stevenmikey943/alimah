@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Alimah: The Devil Levels — Ultimate</title>
+<style>
+  :root{
+    --bg1:#c79b63; --bg2:#8b5e34; --bg3:#4e342e;
+    --platform:#795548; --trap:#000; --player:#00ff55;
+  }
+  html,body{height:100%;margin:0;background:black;overflow:hidden;font-family:Inter,system-ui,Arial;}
+  canvas{display:block;background:linear-gradient(180deg,var(--bg1),var(--bg2),var(--bg3));}
+
+  /* controls bottom */
+  #controls{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:5;display:flex;gap:10px}
+  .btn{width:64px;height:64px;border-radius:999px;border:none;background:#ffcc80;color:#4e342e;font-size:22px;font-weight:700;box-shadow:0 4px 12px rgba(0,0,0,.3)}
+  /* chat toggle button top-right */
+  #chatToggle {
+    position:fixed; top:12px; right:12px; z-index:80;
+    width:56px;height:56px;border-radius:12px;border:none;
+    background:rgba(0,0,0,0.6); color:white; font-weight:700;
+    box-shadow:0 8px 20px rgba(0,0,0,.6); cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+  }
+
+  /* top sliding panel (bar) */
+  #topPanelWrap { position:fixed; top:0; left:0; right:0; display:flex; justify-content:center; z-index:79; pointer-events:none; }
+  #topPanel {
+    width:92%; max-width:420px;
+    margin-top:10px;
+    pointer-events:auto;
+    background:rgba(0,0,0,0.62);
+    backdrop-filter: blur(6px);
+    color:#fff;
+    border-radius:10px;
+    padding:10px;
+    transform: translateY(-120%);
+    transition: transform 280ms cubic-bezier(.2,.9,.2,1);
+    box-shadow:0 10px 30px rgba(0,0,0,.6);
+    font-size:13px;
+  }
+  #topPanel.open { transform: translateY(8px); }
+  #chatList{max-height:160px;overflow:auto;padding-right:6px;margin-top:6px}
+  .chatMsg{margin-bottom:6px;line-height:1.1}
+  .meta{opacity:.8;font-size:11px}
+  #chatInput, #codeInput{width:100%;box-sizing:border-box;border-radius:6px;border:none;padding:8px;margin-top:6px;background:rgba(255,255,255,0.06);color:#fff}
+  #sendBtn,#codeBtn{margin-top:6px;width:100%;padding:8px;border-radius:6px;border:none;background:#00bfa5;color:#042; font-weight:700}
+  #notif{position:fixed;left:50%;top:20%;transform:translateX(-50%);z-index:90;padding:12px 18px;border-radius:10px;background:rgba(0,0,0,0.8);color:gold;display:none}
+  #win{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.92);z-index:100;color:gold;font-size:28px;text-align:center;padding:20px}
+  @keyframes glow{from{text-shadow:0 0 8px gold}to{text-shadow:0 0 28px orange}}
+  #win.show{display:flex;animation:glow 1s infinite alternate}
+  @media (max-width:420px){
+    #topPanel{width:94%}
+    .btn{width:56px;height:56px}
+    #chatList{max-height:110px}
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<!-- controls -->
+<div id="controls">
+  <button class="ctrl" id="jump">     ⬆️     </button>
+  <button class="ctrl" id="left"> ⬅️ </button>
+  <button class="ctrl" id="right"> ➡️ </button>
+</div>
+
+<!-- chat toggle -->
+<button id="chatToggle" title="Buka Chat">💬</button>
+
+<!-- top sliding panel -->
+<div id="topPanelWrap">
+  <div id="topPanel" role="dialog" aria-hidden="true">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <strong>Chat</strong>
+      <button id="panelClose" style="background:transparent;border:none;color:#fff;font-weight:700;cursor:pointer">✕</button>
+    </div>
+    <div id="chatList" aria-live="polite"></div>
+    <input id="chatInput" placeholder="Ketik pesan..." autocomplete="off" />
+    <button id="sendBtn">Kirim</button>
+    <hr style="opacity:.12;margin:8px 0;border:none;height:1px;background:rgba(255,255,255,0.08)">
+    <div style="font-size:13px;opacity:.9">Masukkan kode rahasia (disembunyikan)</div>
+    <input id="codeInput" placeholder="Masukkan kode..." autocomplete="off" />
+    <button id="codeBtn">Aktifkan Kode</button>
+  </div>
+</div>
+
+<div id="notif"></div>
+<div id="win">🎉 Selamat! Kamu orang pertama yang memenangkan game ini! 💚</div>
+
+<script>
+/* ------------- Canvas setup ------------- */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+function fitCanvas(){ canvas.width = window.innerWidth; canvas.height = Math.max(420, window.innerHeight*0.78); }
+fitCanvas(); window.addEventListener('resize', fitCanvas);
+
+/* ------------- Game state ------------- */
+let level = 1, MAX_LEVEL = 100;
+let gravity = 0.9, zoom = 1.25;
+let camera = {x:0,y:0};
+
+let player = {
+  x:120, y:0, w:40, h:40,
+  vx:0, vy:0, onGround:false,
+  speed:8, jump:-16,
+  color:'#00ff55', hp:3, canFly:false, flying:false,
+  invincible:false, invisible:false
+};
+
+let platforms = [], traps = [], goal = {x:800,y:300,w:48,h:48};
+
+/* ------------- Input ------------- */
+const keys = {};
+document.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  // jump by space/arrow up/w
+  if((e.key === ' ' || e.key === 'ArrowUp' || e.key === 'w') && player.onGround && !player.flying){
+    player.vy = player.jump;
+  }
+});
+document.addEventListener('keyup', e => { keys[e.key] = false; });
+
+document.getElementById('left').addEventListener('touchstart', ()=>player.vx=-player.speed);
+document.getElementById('left').addEventListener('touchend', ()=>player.vx=0);
+document.getElementById('right').addEventListener('touchstart', ()=>player.vx=player.speed);
+document.getElementById('right').addEventListener('touchend', ()=>player.vx=0);
+document.getElementById('jump').addEventListener('touchstart', ()=>{ if(player.onGround) player.vy = player.jump; if(player.canFly) player.flying=true; });
+
+/* ------------- Chat panel toggle ------------- */
+const chatToggle = document.getElementById('chatToggle');
+const topPanel = document.getElementById('topPanel');
+const panelClose = document.getElementById('panelClose');
+const chatListEl = document.getElementById('chatList');
+const chatInputEl = document.getElementById('chatInput');
+const sendBtn = document.getElementById('sendBtn');
+const codeInput = document.getElementById('codeInput');
+const codeBtn = document.getElementById('codeBtn');
+let chatMessages = [];
+
+function renderChat(){
+  chatListEl.innerHTML = '';
+  for(const m of chatMessages){
+    const d = document.createElement('div');
+    d.className = 'chatMsg';
+    d.innerHTML = `<div style="font-weight:700">${m.name}</div><div>${m.text}</div><div class="meta">${m.time}</div>`;
+    chatListEl.appendChild(d);
+  }
+  chatListEl.scrollTop = chatListEl.scrollHeight;
+}
+function addChat(name,text){
+  chatMessages.push({name,text,time:new Date().toLocaleTimeString()});
+  if(chatMessages.length>30) chatMessages.shift();
+  renderChat();
+  showNotif('Pesan dikirim (lokal)');
+}
+
+let panelOpen = false;
+function openPanel(){ topPanel.classList.add('open'); topPanel.setAttribute('aria-hidden','false'); panelOpen=true; setTimeout(()=>chatInputEl.focus(),60); }
+function closePanel(){ topPanel.classList.remove('open'); topPanel.setAttribute('aria-hidden','true'); panelOpen=false; chatToggle.focus(); }
+chatToggle.addEventListener('click', ()=> panelOpen ? closePanel() : openPanel());
+panelClose.addEventListener('click', closePanel);
+sendBtn.onclick = ()=> { const txt = chatInputEl.value.trim(); if(!txt) return; addChat('Kamu', txt); chatInputEl.value=''; };
+
+/* ------------- Notifications ------------- */
+const notifEl = document.getElementById('notif');
+let notifTimer = null;
+function showNotif(txt, timeout=2000){
+  clearTimeout(notifTimer);
+  notifEl.textContent = txt;
+  notifEl.style.display = 'block';
+  notifTimer = setTimeout(()=> notifEl.style.display = 'none', timeout);
+}
+
+/* ------------- Cheat codes & controller ------------- */
+const activeCheats = {}; // boolean flags
+const cheatTimers = {};  // store timeout ids so STOPCODE can clear
+const defaultState = {
+  speed:5, jump:-15, gravity:0.9, invincible:false, invisible:false, canFly:false
+};
+
+function resetAllCheats(){
+  // clear timers
+  for(const k in cheatTimers){ clearTimeout(cheatTimers[k]); delete cheatTimers[k]; }
+  // reset flags
+  for(const k in activeCheats) delete activeCheats[k];
+  // reset player to defaults
+  player.speed = defaultState.speed;
+  player.jump = defaultState.jump;
+  gravity = defaultState.gravity;
+  player.invincible = defaultState.invincible;
+  player.invisible = defaultState.invisible;
+  player.canFly = defaultState.canFly;
+  player.flying = false;
+  showNotif('Semua kode dimatikan');
+}
+
+function activateTemp(name, ms=10000, onStart, onEnd, messageStart){
+  // clear existing timer for this cheat
+  if(cheatTimers[name]) { clearTimeout(cheatTimers[name]); delete cheatTimers[name]; }
+  activeCheats[name] = true;
+  if(onStart) onStart();
+  if(messageStart) showNotif(messageStart);
+  cheatTimers[name] = setTimeout(()=> {
+    delete activeCheats[name];
+    delete cheatTimers[name];
+    if(onEnd) onEnd();
+    showNotif(name + ' berakhir', 1400);
+  }, ms);
+}
+
+const codeActions = {
+  'ALIMAH100': ()=>{ level = MAX_LEVEL; makeLevel(level); showNotif('Cheat: langsung ke Level 100'); },
+  'JUMP10X': ()=>{ activateTemp('JUMP10X',10000, ()=>player.jump = -40, ()=>player.jump = defaultState.jump, 'Lompat super tinggi aktif'); },
+  'HEALME': ()=>{ player.hp = 5; showNotif('HP terisi penuh'); },
+  'FASTRUN': ()=>{ activateTemp('FASTRUN',15000, ()=>player.speed *= 1.8, ()=>player.speed = Math.max(defaultState.speed, player.speed/1.8), 'FastRun aktif'); },
+  'SLOWMO': ()=>{ activateTemp('SLOWMO',12000, ()=>{ gravity *= 0.5; }, ()=>{ gravity = defaultState.gravity; }, 'Slow-motion aktif'); },
+  'DEVILMODE': ()=>{ activateTemp('DEVILMODE',15000, ()=>player.invincible = true, ()=>player.invincible = false, 'DevilMode: kebal'); },
+  'INVISIBLE': ()=>{ activateTemp('INVISIBLE',10000, ()=>player.invisible = true, ()=>player.invisible = false, 'Invisible: tersembunyi'); },
+  'GOLDRAIN': ()=>{ spawnGoldBurst(); activateTemp('GOLDRAIN',8000,null,null,'Hujan koin!'); },
+  'RESET': ()=>{ makeLevel(level); showNotif('Level di-reset'); },
+  'NEXTLVL': ()=>{ if(level<MAX_LEVEL) level++; makeLevel(level); showNotif('Naik 1 level'); },
+  'BACKLVL': ()=>{ if(level>1) level--; makeLevel(level); showNotif('Kembali 1 level'); },
+  'GODMODE': ()=>{ activateTemp('GODMODE',20000, ()=>{ player.invincible=true; player.speed*=1.8; player.jump=-26; }, ()=>{ player.invincible=false; player.speed = defaultState.speed; player.jump = defaultState.jump; }, 'GodMode aktif'); },
+  'ALIMAHLOVE': ()=>{ triggerLoveEffect(); activateTemp('ALIMAHLOVE',12000, null, ()=>loveParticles = [], 'AlimahLove!'); },
+  'SECRETBG': ()=>{ toggleSecretBG(); },
+  'FLYSKY': ()=>{ player.canFly = true; player.flying = true; showNotif('Terbang aktif (FLYSKY). Tekan F untuk toggle, ArrowUp untuk naik, ArrowDown turun.'); },
+  'STOPCODE': ()=>{ resetAllCheats(); },
+  'RUNBOOST': ()=>{ activateTemp('RUNBOOST',12000, ()=>player.speed *= 2.6, ()=>player.speed = Math.max(defaultState.speed, player.speed/2.6), 'RunBoost aktif'); }
+};
+
+codeBtn.onclick = ()=> {
+  const code = (codeInput.value||'').toUpperCase().trim();
+  if(!code) return;
+  if(codeActions[code]) {
+    codeActions[code]();
+    codeInput.value = '';
+    // close panel after entering code for cleaner UX
+    closePanel();
+  } else {
+    showNotif('Kode tidak dikenal');
+  }
+};
+
+/* ------------- Visual effects ------------- */
+let golds = [], loveParticles = [], secretBG = false;
+function spawnGoldBurst(){ for(let i=0;i<30;i++){ golds.push({x:player.x + Math.random()*60 - 30, y:player.y, vx:(Math.random()-0.5)*6, vy:-Math.random()*6 - 2, life:200}); } }
+function triggerLoveEffect(){ for(let i=0;i<20;i++){ loveParticles.push({x:player.x + Math.random()*40 - 20, y:player.y, vx:(Math.random()-0.5)*2, vy:-Math.random()*2 - 1, life:200}); } }
+function toggleSecretBG(){ secretBG = !secretBG; showNotif(secretBG ? 'Latar pelangi aktif' : 'Latar rahasia dimatikan'); }
+
+/* ------------- Level generator ------------- */
+function makeLevel(lvl){
+  platforms = []; traps = [];
+  const baseSpacing = Math.max(160, 220 - Math.floor(lvl/5));
+  const cols = Math.min(40, 12 + Math.floor(lvl*0.9));
+  const amplitude = 60 + (lvl%6)*12;
+  for(let i=0;i<cols;i++){
+    const x = i * baseSpacing + (i>0? Math.random()*40-20:0);
+    const y = 380 + Math.sin(i/2 + lvl/10) * amplitude + (Math.random()*40 - 20);
+    platforms.push({x,y,w:Math.max(120, baseSpacing-30),h:28, id:i});
+    const trapChance = Math.min(0.5, 0.06 + lvl*0.003 + (i%5===0?0.05:0));
+    if(Math.random() < trapChance && lvl>2) traps.push({x:x + 40 + Math.random()*40, y: y - 12, w: Math.max(40, Math.random()*80), h:10});
+  }
+  if(lvl > 12){
+    for(let i=0;i<Math.min(6,Math.floor(lvl/8));i++){
+      const p = platforms[Math.floor(Math.random()*platforms.length)];
+      p.move = {amp: 60 + Math.random()*80, speed: 0.004 + Math.random()*0.01, baseY: p.y};
+    }
+  }
+  const last = platforms[platforms.length-1];
+  goal.x = last.x + last.w + 80; goal.y = Math.max(120, last.y - 60); goal.w = 48; goal.h = 48;
+  player.x = 80; player.y = 0; player.vx=0; player.vy=0; player.onGround=false;
+  // preserve canFly if already unlocked
+  showNotif('Level ' + lvl, 800);
+}
+
+/* ------------- Physics & collisions ------------- */
+function applyPhysics(){
+  if(player.flying && player.canFly){
+    player.vy *= 0.9;
+    if(keys['ArrowUp']||keys['w']||keys[' ']) player.vy -= 0.6;
+    if(keys['ArrowDown']||keys['s']) player.vy += 0.6;
+  } else {
+    player.vy += gravity;
+  }
+
+  if(keys['ArrowLeft']||keys['a']) player.vx = -player.speed;
+  else if(keys['ArrowRight']||keys['d']) player.vx = player.speed;
+  else if(!player.flying) player.vx *= 0.8;
+
+  player.x += player.vx; player.y += player.vy;
+
+  for(const p of platforms) if(p.move) p.y = p.move.baseY + Math.sin(Date.now()*p.move.speed + p.id) * p.move.amp;
+
+  player.onGround = false;
+  for(const p of platforms){
+    if(player.x < p.x + p.w && player.x + player.w > p.x && player.y + player.h > p.y && player.y + player.h < p.y + 24 && player.vy >= 0){
+      player.y = p.y - player.h; player.vy = 0; player.onGround = true; player.flying = false;
+    }
+  }
+
+  for(const t of traps){
+    if(t.disabled) continue;
+    if(player.x < t.x + t.w && player.x + player.w > t.x && player.y + player.h > t.y && player.y < t.y + t.h){
+      if(!player.invincible){
+        player.hp = Math.max(0, player.hp - 1);
+        showNotif('Kena jebakan! HP: ' + player.hp, 1400);
+        player.x = 80; player.y = 0; player.vx=0; player.vy=0;
+        if(player.hp<=0){ level = Math.max(1, level-1); makeLevel(level); player.hp=3; showNotif('Kamu mundur 1 level karena HP habis',1600); }
+      } else {
+        t.disabled = true;
+      }
+    }
+  }
+
+  // reach goal
+  if(player.x + player.w > goal.x && player.x < goal.x + goal.w && player.y + player.h > goal.y && player.y < goal.y + goal.h){
+    if(level < MAX_LEVEL){ level++; makeLevel(level); } else { document.getElementById('win').classList.add('show'); }
+  }
+
+  // fall out
+  if(player.y > canvas.height + 500){
+    player.hp = Math.max(0, player.hp - 1);
+    showNotif('Terjatuh! HP: ' + player.hp, 1200);
+    player.x = 80; player.y = 0; player.vx=0; player.vy=0;
+    if(player.hp<=0){ level = Math.max(1, level-1); makeLevel(level); player.hp=3; }
+  }
+
+  // zoom dynamic
+  const targetZoom = 1.05 + Math.min(0.9, Math.abs(player.vx)/10);
+  zoom += (targetZoom - zoom) * 0.05;
+}
+
+/* ------------- Draw ------------- */
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.save();
+
+  const targetX = player.x - (canvas.width/2)/zoom + player.w/2;
+  const targetY = player.y - (canvas.height/2)/zoom + player.h/2;
+  camera.x += (targetX - camera.x) * 0.12;
+  camera.y += (targetY - camera.y) * 0.12;
+  if(camera.x < 0) camera.x = 0; if(camera.y < 0) camera.y = 0;
+
+  ctx.translate(canvas.width/2, canvas.height/2);
+  ctx.scale(zoom, zoom);
+  ctx.translate(-camera.x - canvas.width/2, -camera.y - canvas.height/2);
+
+  // background
+  if(secretBG){
+    const colors = ['#ff8a80','#ffd180','#ffff8d','#b9f6ca','#80d8ff','#b388ff','#ff80ab'];
+    for(let i=0;i<30;i++){ ctx.fillStyle = colors[i % colors.length]; ctx.fillRect(i*200 - (camera.x*0.2 % 200), 0, 200, canvas.height); }
+  } else {
+    ctx.fillStyle = 'rgba(0,0,0,0.06)';
+    for(let i=0;i<25;i++){
+      ctx.beginPath();
+      const ox = i*300 - (camera.x*0.1);
+      ctx.ellipse(ox, 520, 220, 80, 0, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  // platforms
+  ctx.fillStyle = '#795548';
+  for(const p of platforms){ ctx.fillRect(p.x, p.y, p.w, p.h); if(p.move){ ctx.strokeStyle='rgba(255,255,255,0.05)'; ctx.strokeRect(p.x, p.y, p.w, p.h); } }
+
+  // traps
+  ctx.fillStyle = '#000';
+  for(const t of traps){ if(t.disabled) continue; ctx.fillRect(t.x, t.y, t.w, t.h); }
+
+  // goal
+  ctx.fillStyle = 'gold'; ctx.fillRect(goal.x, goal.y, goal.w, goal.h);
+
+  // player
+  if(!player.invisible){ ctx.fillStyle = player.color; ctx.fillRect(player.x, player.y, player.w, player.h); }
+  else { ctx.strokeStyle='rgba(0,255,255,0.6)'; ctx.strokeRect(player.x, player.y, player.w, player.h); }
+
+  // particles
+  for(let i=golds.length-1;i>=0;i--){ const g=golds[i]; ctx.fillStyle='yellow'; ctx.fillRect(g.x,g.y,6,6); g.x+=g.vx; g.y+=g.vy; g.vy+=0.18; g.life-=16; if(g.life<=0) golds.splice(i,1); }
+  for(let i=loveParticles.length-1;i>=0;i--){ const L=loveParticles[i]; ctx.fillStyle='rgba(255,50,120,0.9)'; ctx.fillRect(L.x,L.y,6,6); L.x+=L.vx; L.y+=L.vy; L.vy+=0.08; L.life-=10; if(L.life<=0) loveParticles.splice(i,1); }
+
+  ctx.restore();
+
+  // HUD
+  ctx.fillStyle = '#fff'; ctx.font = '16px monospace';
+  ctx.fillText('Level: ' + level + ' / ' + MAX_LEVEL, 12, 20);
+  ctx.fillText('HP: ' + player.hp, 12, 40);
+  const cheatNames = Object.keys(activeCheats);
+  if(cheatNames.length){ ctx.fillStyle='gold'; ctx.fillText('Cheat: ' + cheatNames.join(','), 12, 60); }
+}
+
+/* ------------- Main loop ------------- */
+let last = performance.now();
+function loop(now){
+  const dt = now - last; last = now;
+  applyPhysics();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+/* ------------- Utilities & startup ------------- */
+makeLevel(level);
+requestAnimationFrame(loop);
+
+</script>
+</body>
+</html>
